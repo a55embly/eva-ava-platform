@@ -1,0 +1,1 @@
+"""Interchangeable model-provider adapters."""
