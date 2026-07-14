@@ -78,6 +78,17 @@ recorded in hermes/VERSION.
   HMAC secret in the captured container logs.
 - Both services remained running after the test; the backend health check was
   healthy and no host ports were published.
+- Limited single-user DM verification exercised the protected tool end to end:
+  Telegram -> pre_gateway_dispatch -> authorization -> hidden task-local
+  capability -> aitegrate_contract_lookup -> /consume -> a result with
+  citation_id contract-spike-1 -> end-of-turn revocation.
+- Three protected-tool turns succeeded for the same allowed user: the initial
+  turn, a fresh turn after revocation, and a fresh turn after restarting only
+  the Hermes gateway. The backend totals increased from 3/0/2 to 6/3/5
+  successful authorize/consume/revoke responses, with no 4xx or 5xx response.
+- The user-visible tool arguments contained only the requested query, and the
+  tool results contained only fictional evidence and citation_id. Aggregated
+  scans of both service logs found no context_token or capability marker.
 
 ## Still unconfirmed
 
@@ -85,9 +96,9 @@ recorded in hermes/VERSION.
   redaction.
 - Gateway application-process users and availability during a real configured
   gateway run.
-- A second allowed user, a denied user, an approved group/forum, mention
-  behavior, restart behavior, a live protected-tool `/consume`, multiple tool
-  calls and a fresh tool-using turn after revocation.
+- A second allowed user, a denied user, an approved and a foreign group/forum,
+  mention behavior in groups, and concurrent calls in a running gateway
+  process.
 
 ## Separately blocked session-deletion lifecycle
 
@@ -127,7 +138,8 @@ for SQLite rows, transcript files and any other configured artifacts.
 ## Current limitations
 
 - Live verification currently covers one allowed Telegram user in a private
-  chat only; it is not the full acceptance matrix.
+  chat only, including repeated protected-tool calls and a gateway restart; it
+  is not the full acceptance matrix and the decision remains pending.
 - No Telegram token or OAuth credentials are stored in the repository.
 - The synchronous plugin hook is acceptable for a local spike only; its
   latency and failure behavior must be measured before production use.
