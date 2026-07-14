@@ -18,7 +18,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "pytest", "pytest-asyncio", "ruff"]
+dev = [
+  "mypy",
+  "pytest",
+  "pytest-asyncio",
+  "pyyaml==6.0.3",
+  "ruff",
+  "types-pyyaml==6.0.12.20260518",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

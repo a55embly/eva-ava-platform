@@ -1,0 +1,52 @@
+name: aitegrate-hermes-spike
+
+services:
+  spike-auth:
+    build:
+      context: .
+      dockerfile: deployments/docker/hermes-spike-backend.Dockerfile
+    environment:
+      AITEGRATE_HERMES_INSTANCE_ID: ${AITEGRATE_HERMES_INSTANCE_ID?set AITEGRATE_HERMES_INSTANCE_ID}
+      AITEGRATE_HERMES_SHARED_SECRET: ${AITEGRATE_HERMES_SHARED_SECRET?set AITEGRATE_HERMES_SHARED_SECRET}
+      AITEGRATE_SPIKE_ALLOWED_USERS: ${AITEGRATE_SPIKE_ALLOWED_USERS?set AITEGRATE_SPIKE_ALLOWED_USERS}
+      AITEGRATE_SPIKE_ADMIN_USERS: ${AITEGRATE_SPIKE_ADMIN_USERS:-}
+      AITEGRATE_SPIKE_ALLOWED_GROUPS: ${AITEGRATE_SPIKE_ALLOWED_GROUPS:-}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health')
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    mem_limit: 256m
+    cpus: 0.5
+
+  hermes:
+    image: nousresearch/hermes-agent:v2026.6.5@sha256:94da6ebb770200580d37c9f6caca70aa9c19caa252d28ac953b7cb42634728ab
+    platform: linux/amd64
+    command: [gateway, run]
+    environment:
+      AITEGRATE_BACKEND_URL: http://spike-auth:8010
+      AITEGRATE_HERMES_INSTANCE_ID: ${AITEGRATE_HERMES_INSTANCE_ID?set AITEGRATE_HERMES_INSTANCE_ID}
+      AITEGRATE_HERMES_SHARED_SECRET: ${AITEGRATE_HERMES_SHARED_SECRET?set AITEGRATE_HERMES_SHARED_SECRET}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USERS: ${AITEGRATE_SPIKE_ALLOWED_USERS}
+      TELEGRAM_GROUP_ALLOWED_USERS: ${AITEGRATE_SPIKE_ALLOWED_USERS}
+      TELEGRAM_GROUP_ALLOWED_CHATS: ${AITEGRATE_SPIKE_ALLOWED_GROUPS:-}
+      TELEGRAM_REQUIRE_MENTION: true
+      TELEGRAM_OBSERVE_UNMENTIONED_GROUP_MESSAGES: false
+    volumes:
+      - hermes-spike-data:/opt/data
+      - ./hermes/plugins/aitegrate_auth_bridge:/opt/data/plugins/aitegrate_auth_bridge:ro
+      - ./hermes/spike/setup_config.py:/opt/aitegrate/setup_config.py:ro
+    depends_on:
+      spike-auth:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 1.5
+
+volumes:
+  hermes-spike-data:

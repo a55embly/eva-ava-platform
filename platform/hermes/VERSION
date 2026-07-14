@@ -1,0 +1,4 @@
+release=v2026.6.5
+source_commit=3c231eb3979ab9c57d5cd6d02f1d577a3b718b43
+linux_amd64_digest=sha256:94da6ebb770200580d37c9f6caca70aa9c19caa252d28ac953b7cb42634728ab
+license=MIT
