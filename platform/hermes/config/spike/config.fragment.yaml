@@ -1,0 +1,14 @@
+# Expected state applied by hermes/spike/setup_config.py after Hermes setup.
+# This is reference documentation, not a file to merge manually.
+plugins:
+  enabled:
+    - aitegrate-auth-bridge
+
+platform_toolsets:
+  telegram:
+    - aitegrate
+
+telegram:
+  require_mention: true
+  observe_unmentioned_group_messages: false
+  exclusive_bot_mentions: true

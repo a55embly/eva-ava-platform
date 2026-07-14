@@ -1,0 +1,13 @@
+name: aitegrate-auth-bridge
+version: 0.1.0
+description: Contract spike for permission-aware Aitegrate tools in the Hermes Telegram gateway.
+author: Aitegrate
+requires_env:
+  - AITEGRATE_BACKEND_URL
+  - AITEGRATE_HERMES_INSTANCE_ID
+  - AITEGRATE_HERMES_SHARED_SECRET
+provides_tools:
+  - aitegrate_contract_lookup
+provides_hooks:
+  - pre_gateway_dispatch
+  - on_session_end

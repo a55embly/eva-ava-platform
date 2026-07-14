@@ -19,6 +19,7 @@ venv/
 dist/
 build/
 *.egg-info/
+complex-debug-journal.md
 
 # Runtime data
 runtime-data/
