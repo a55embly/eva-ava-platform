@@ -37,3 +37,14 @@ Set `HERMES_SOURCE_ROOT` to a clean checkout at commit
 The upstream tests verify the checkout commit, gateway hook ordering, session
 and task identifiers, end-hook arguments, both ContextVar executor bridges and
 real pinned `ToolRegistry.dispatch` without invoking a model.
+
+## Demo knowledge ingestion
+
+Apply `migrations/0001_demo_knowledge_rag.sql` to the local PostgreSQL database,
+then import the fictional Markdown corpus with:
+
+    python -m worker.jobs.ingest_local_knowledge
+
+The command is idempotent, versions changed documents and marks missing local
+documents as deleted. It performs keyword retrieval until ADR 0003 selects an
+embedding provider.

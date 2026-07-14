@@ -1,0 +1,28 @@
+"""One-shot local knowledge ingestion command for the fictional demo."""
+
+from pathlib import Path
+
+import psycopg
+
+from app.config import Settings
+from app.rag.ingestion import IngestionService
+from app.rag.postgres_repository import PostgresKnowledgeRepository
+from app.rag.sources import LocalDirectorySource
+
+
+def main() -> None:
+    settings = Settings()  # type: ignore[call-arg]  # populated by pydantic-settings
+    database_url = settings.database_url.replace("postgresql+psycopg://", "postgresql://")
+    with psycopg.connect(database_url) as connection:
+        report = IngestionService(
+            PostgresKnowledgeRepository(connection),
+            LocalDirectorySource(Path(settings.local_knowledge_path)),
+        ).run(settings.tenant_id)
+    print(
+        f"knowledge ingestion: scanned={report.scanned} updated={report.updated} "
+        f"unchanged={report.unchanged} deleted={report.deleted}"
+    )
+
+
+if __name__ == "__main__":
+    main()
