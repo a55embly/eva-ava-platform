@@ -1,4 +1,4 @@
-# Aitegrate Enterprise Chatbot
+# Enterprise Chatbot
 
 Reusable, single-tenant company assistant platform developed by Aitegrate.
 
