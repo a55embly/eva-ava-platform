@@ -1,28 +1,31 @@
-# ADR 0003: Embedding provider remains unselected
+# ADR 0003: Use local EmbeddingGemma embeddings
 
 ## Status
 
-Proposed — decision required.
+Accepted — 2026-08-10.
 
 ## Context
 
-The demo RAG stores optional pgvector embeddings behind an `EmbeddingProvider`
-interface. Keyword retrieval works without embeddings, so selecting cost,
-privacy and operational trade-offs is not required to validate authorization,
-versioning and citations.
+The demo needs semantic retrieval while keeping document ingestion independent
+from the hosted answer model. Indexing and queries must use the same embedding
+model. Changing that model must not create a new document version or citation.
 
-## Options
+## Decision
 
-1. Hosted embeddings API: simplest operations and usually strongest baseline,
-   but introduces per-use cost and sends fictional document text to a provider.
-2. Small local embedding model: keeps data local and avoids per-call fees, but
-   adds model files, inference dependencies and resource ownership.
-3. Compatible customer-managed endpoint: preserves the interface and may fit
-   production governance, but requires an endpoint contract and operations.
+Use Ollama's local `embeddinggemma` model behind `EmbeddingProvider`. Store its
+model identifier beside every chunk vector. Reindex missing vectors and vectors
+made by another model in place, preserving document version and stable citation
+IDs. If Ollama is unavailable, retrieval falls back explicitly to permission-
+filtered keyword search and returns a warning.
 
-No option is selected in this feature. Vector dimensionality remains open until
-the owner approves a provider and evaluation criteria.
+The fictional demo corpus is small, so PostgreSQL performs exact cosine search.
+An ANN index is deferred until measurements on a representative corpus justify
+its operational and recall trade-offs.
 
-Selecting and enabling a provider will require an explicit reindexing mechanism.
-Documents ingested without embeddings are not automatically rebuilt merely
-because an embedding provider is configured later.
+## Consequences
+
+- Document text used for embeddings remains on the local machine.
+- Local setup must install Ollama and pull `embeddinggemma`.
+- Semantic and keyword rankings are combined with Reciprocal Rank Fusion.
+- A model change causes vector reindexing, not content versioning.
+- Production model choice and retrieval evaluation remain customer-specific.

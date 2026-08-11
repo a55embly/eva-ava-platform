@@ -17,9 +17,10 @@ def migrated_database() -> Iterator[None]:
     if database_url is None:
         yield
         return
-    migration = Path(__file__).parents[2] / "migrations" / "0001_demo_knowledge_rag.sql"
     with psycopg.connect(database_url) as connection:
-        connection.execute(migration.read_text(encoding="utf-8"))
+        migrations = Path(__file__).parents[2] / "migrations"
+        for migration in sorted(migrations.glob("*.sql")):
+            connection.execute(migration.read_text(encoding="utf-8"))
     yield
 
 
@@ -193,3 +194,50 @@ def test_postgres_repository_isolates_tenants_for_employee_and_admin() -> None:
         assert repository.search(
             "tenant-b", AccessLevel.EMPLOYEE, "izolowana procedura", 5
         )
+
+
+@pytest.mark.skipif(
+    not os.getenv("RAG_TEST_DATABASE_URL"),
+    reason="RAG_TEST_DATABASE_URL must point to a disposable PostgreSQL database",
+)
+def test_postgres_reindexes_embeddings_without_changing_version_or_citation() -> None:
+    database_url = os.environ["RAG_TEST_DATABASE_URL"]
+    with psycopg.connect(database_url) as connection:
+        connection.execute("TRUNCATE rag_documents CASCADE")
+        repository = PostgresKnowledgeRepository(connection)
+        item = SourceDocument(
+            "demo",
+            "integration",
+            "remote",
+            "Praca zdalna",
+            "Praca spoza biura wymaga zgody.",
+            AccessLevel.EMPLOYEE,
+            datetime(2026, 2, 1, tzinfo=UTC),
+        )
+        chunks = chunk_document(item.content)
+        assert repository.sync_document(
+            item, chunks, [[1.0, 0.0]], embedding_model="model-v1"
+        )
+        before = repository.search(
+            "demo",
+            AccessLevel.EMPLOYEE,
+            "obowiązki z domu",
+            5,
+            query_embedding=[1.0, 0.0],
+            embedding_model="model-v1",
+        )
+
+        assert repository.sync_document(
+            item, chunks, [[0.0, 1.0]], embedding_model="model-v2"
+        )
+        after = repository.search(
+            "demo",
+            AccessLevel.EMPLOYEE,
+            "obowiązki z domu",
+            5,
+            query_embedding=[0.0, 1.0],
+            embedding_model="model-v2",
+        )
+
+        assert after[0].document_version == 1
+        assert after[0].citation_id == before[0].citation_id

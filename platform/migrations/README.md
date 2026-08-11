@@ -1,11 +1,14 @@
 # Database migrations
 
-Apply migrations in lexical order with a role that owns the application schema.
+`python -m worker.jobs.migrate` applies SQL files in lexical order and records
+each filename in `schema_migrations`. Compose runs this command as the one-shot
+`migrate` service before ingestion and API startup.
 
-`0001_demo_knowledge_rag.sql` enables pgvector and creates versioned documents,
-chunks, access metadata and stable citation identifiers. Vector dimensionality
-is intentionally not constrained until an embedding provider is selected.
+- `0001_demo_knowledge_rag.sql` enables pgvector and creates versioned
+  documents, chunks, access metadata and stable citations.
+- `0002_embedding_model.sql` records the embedding model for safe vector
+  reindexing without changing document versions or citation IDs.
 
-Migrations are applied once to each database. A dedicated migration runner and
-history table will track applied migrations before production rollout; until
-then, use a disposable database or schema when verifying migration changes.
+Run migrations with the schema-owner role. A failed file is not recorded and
+must be fixed before rerunning. Never edit an already-applied migration; add a
+new numbered file.

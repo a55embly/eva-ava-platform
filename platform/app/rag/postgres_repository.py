@@ -2,15 +2,17 @@
 
 import hashlib
 import uuid
+from dataclasses import replace
 from typing import Any
 
+import psycopg
 from pgvector.psycopg import register_vector
 from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.rag.models import AccessLevel, ChunkDraft, SourceDocument, StoredChunk
-from app.rag.repositories import keyword_stems
+from app.rag.repositories import keyword_stems, reciprocal_rank_fusion
 
 
 class PostgresKnowledgeRepository:
@@ -24,6 +26,8 @@ class PostgresKnowledgeRepository:
         document: SourceDocument,
         chunks: list[ChunkDraft],
         embeddings: list[list[float]] | None,
+        *,
+        embedding_model: str | None = None,
     ) -> bool:
         if embeddings is not None and len(embeddings) != len(chunks):
             raise ValueError("embedding count must equal chunk count")
@@ -32,12 +36,21 @@ class PostgresKnowledgeRepository:
             cursor.execute(
                 """SELECT d.id, d.title, d.access_level, d.source_url,
                           d.source_metadata, d.source_modified_at, d.is_deleted,
-                          v.version_number, v.content_sha256
+                          v.id AS version_id, v.version_number, v.content_sha256,
+                          (SELECT bool_and(
+                              c.embedding IS NOT NULL AND c.embedding_model = %s
+                           ) FROM rag_chunks c WHERE c.version_id = v.id
+                          ) AS embeddings_current
                 FROM rag_documents d LEFT JOIN rag_document_versions v
                   ON v.document_id = d.id AND v.is_current
                 WHERE d.tenant_id = %s AND d.source_name = %s AND d.source_id = %s
                 FOR UPDATE OF d""",
-                (document.tenant_id, document.source_name, document.source_id),
+                (
+                    embedding_model,
+                    document.tenant_id,
+                    document.source_name,
+                    document.source_id,
+                ),
             )
             current = cursor.fetchone()
             content_changed = current is None or current["content_sha256"] != content_hash
@@ -50,7 +63,18 @@ class PostgresKnowledgeRepository:
                     current["source_modified_at"] != document.modified_at,
                 )
             )
-            if current and not content_changed and not metadata_changed and not current["is_deleted"]:
+            embeddings_changed = (
+                embeddings is not None
+                and current is not None
+                and not bool(current["embeddings_current"])
+            )
+            if (
+                current
+                and not content_changed
+                and not metadata_changed
+                and not current["is_deleted"]
+                and not embeddings_changed
+            ):
                 return False
             next_version = 1 if current is None else int(current["version_number"] or 0) + 1
             cursor.execute(
@@ -81,6 +105,22 @@ class PostgresKnowledgeRepository:
                 raise RuntimeError("document upsert returned no identifier")
             document_id = document_row["id"]
             if not content_changed:
+                assert current is not None
+                if embeddings_changed:
+                    for chunk, current_embedding in zip(
+                        chunks, embeddings or [], strict=True
+                    ):
+                        cursor.execute(
+                            """UPDATE rag_chunks
+                               SET embedding = %s, embedding_model = %s
+                               WHERE version_id = %s AND chunk_index = %s""",
+                            (
+                                current_embedding,
+                                embedding_model,
+                                current["version_id"],
+                                chunk.index,
+                            ),
+                        )
                 return True
             cursor.execute(
                 "UPDATE rag_document_versions SET is_current = false "
@@ -103,12 +143,23 @@ class PostgresKnowledgeRepository:
                     f"{document.tenant_id}:{document.source_name}:"
                     f"{document.source_id}:{next_version}:{chunk.index}",
                 )
-                embedding = None if embeddings is None else embeddings[chunk.index]
+                chunk_embedding = (
+                    None if embeddings is None else embeddings[chunk.index]
+                )
                 cursor.execute(
                     """INSERT INTO rag_chunks
-                        (version_id, chunk_index, content, section, citation_id, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (version_id, chunk.index, chunk.content, chunk.section, citation_id, embedding),
+                        (version_id, chunk_index, content, section, citation_id,
+                         embedding, embedding_model)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        version_id,
+                        chunk.index,
+                        chunk.content,
+                        chunk.section,
+                        citation_id,
+                        chunk_embedding,
+                        embedding_model,
+                    ),
                 )
         return True
 
@@ -125,40 +176,117 @@ class PostgresKnowledgeRepository:
             return cursor.rowcount
 
     def search(
-        self, tenant_id: str, access_level: AccessLevel, query: str, limit: int
+        self,
+        tenant_id: str,
+        access_level: AccessLevel,
+        query: str,
+        limit: int,
+        *,
+        query_embedding: list[float] | None = None,
+        embedding_model: str | None = None,
     ) -> list[StoredChunk]:
         allowed = [AccessLevel.EMPLOYEE.value]
         if access_level is AccessLevel.ADMIN:
             allowed.append(AccessLevel.ADMIN.value)
         tsquery = " | ".join(f"{stem}:*" for stem in sorted(keyword_stems(query)))
-        if not tsquery:
-            return []
+        keyword_hits: list[StoredChunk] = []
+        semantic_hits: list[StoredChunk] = []
+        candidate_limit = max(limit * 2, limit)
         with self._connection.cursor() as cursor:
-            cursor.execute(
-                """SELECT c.citation_id, d.title, v.version_number, c.content, c.section,
-                       d.source_url, d.access_level, d.source_metadata,
-                       greatest(
-                           ts_rank(c.search_vector, to_tsquery('simple', %s)),
-                           ts_rank(d.title_search_vector, to_tsquery('simple', %s))
-                       ) AS score
-                FROM rag_chunks c
-                JOIN rag_document_versions v ON v.id = c.version_id AND v.is_current
-                JOIN rag_documents d ON d.id = v.document_id AND NOT d.is_deleted
-                WHERE d.tenant_id = %s AND d.access_level = ANY(%s)
-                  AND (c.search_vector @@ to_tsquery('simple', %s)
-                       OR d.title_search_vector @@ to_tsquery('simple', %s))
-                ORDER BY (
-                             coalesce(d.source_metadata->>'status', '') = 'outdated'
-                         ) ASC,
-                         score DESC, c.citation_id LIMIT %s""",
-                (tsquery, tsquery, tenant_id, allowed, tsquery, tsquery, limit),
-            )
-            return [
-                StoredChunk(
-                    str(row["citation_id"]), row["title"], row["version_number"],
-                    row["content"], row["section"], row["source_url"],
-                    AccessLevel(row["access_level"]), row["source_metadata"],
-                    float(row["score"]),
+            if tsquery:
+                cursor.execute(
+                    """SELECT c.citation_id, d.title, v.version_number, c.content,
+                              c.section, d.source_url, d.access_level, d.source_metadata,
+                              greatest(
+                                  ts_rank(c.search_vector, to_tsquery('simple', %s)),
+                                  ts_rank(d.title_search_vector, to_tsquery('simple', %s))
+                              ) AS score
+                       FROM rag_chunks c
+                       JOIN rag_document_versions v
+                         ON v.id = c.version_id AND v.is_current
+                       JOIN rag_documents d ON d.id = v.document_id AND NOT d.is_deleted
+                       WHERE d.tenant_id = %s AND d.access_level = ANY(%s)
+                         AND (c.search_vector @@ to_tsquery('simple', %s)
+                              OR d.title_search_vector @@ to_tsquery('simple', %s))
+                       ORDER BY score DESC, c.citation_id LIMIT %s""",
+                    (
+                        tsquery,
+                        tsquery,
+                        tenant_id,
+                        allowed,
+                        tsquery,
+                        tsquery,
+                        candidate_limit,
+                    ),
                 )
-                for row in cursor.fetchall()
-            ]
+                keyword_hits = _stored_chunks(cursor.fetchall())
+            if query_embedding is not None and embedding_model is not None:
+                cursor.execute(
+                    """SELECT c.citation_id, d.title, v.version_number, c.content,
+                              c.section, d.source_url, d.access_level, d.source_metadata,
+                              1 - (c.embedding <=> %s::vector) AS score
+                       FROM rag_chunks c
+                       JOIN rag_document_versions v
+                         ON v.id = c.version_id AND v.is_current
+                       JOIN rag_documents d ON d.id = v.document_id AND NOT d.is_deleted
+                       WHERE d.tenant_id = %s AND d.access_level = ANY(%s)
+                         AND c.embedding IS NOT NULL AND c.embedding_model = %s
+                       ORDER BY c.embedding <=> %s::vector, c.citation_id LIMIT %s""",
+                    (
+                        query_embedding,
+                        tenant_id,
+                        allowed,
+                        embedding_model,
+                        query_embedding,
+                        candidate_limit,
+                    ),
+                )
+                semantic_hits = _stored_chunks(cursor.fetchall())
+        return reciprocal_rank_fusion(keyword_hits, semantic_hits, limit)
+
+
+class PostgresKnowledgeSearchRepository:
+    """Open a short-lived PostgreSQL connection for each API retrieval."""
+
+    def __init__(self, database_url: str) -> None:
+        self._database_url = database_url
+
+    def search(
+        self,
+        tenant_id: str,
+        access_level: AccessLevel,
+        query: str,
+        limit: int,
+        *,
+        query_embedding: list[float] | None = None,
+        embedding_model: str | None = None,
+    ) -> list[StoredChunk]:
+        with psycopg.connect(self._database_url) as connection:
+            return PostgresKnowledgeRepository(connection).search(
+                tenant_id,
+                access_level,
+                query,
+                limit,
+                query_embedding=query_embedding,
+                embedding_model=embedding_model,
+            )
+
+
+def _stored_chunks(rows: list[dict[str, Any]]) -> list[StoredChunk]:
+    return [
+        replace(
+            StoredChunk(
+                str(row["citation_id"]),
+                row["title"],
+                row["version_number"],
+                row["content"],
+                row["section"],
+                row["source_url"],
+                AccessLevel(row["access_level"]),
+                row["source_metadata"],
+                0.0,
+            ),
+            score=float(row["score"]),
+        )
+        for row in rows
+    ]

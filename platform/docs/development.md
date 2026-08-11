@@ -40,11 +40,55 @@ real pinned `ToolRegistry.dispatch` without invoking a model.
 
 ## Demo knowledge ingestion
 
-Apply `migrations/0001_demo_knowledge_rag.sql` to the local PostgreSQL database,
-then import the fictional Markdown corpus with:
+Install Ollama, sign in to the account used for cloud models and make the local
+embedding model available:
+
+    ollama signin
+    ollama pull embeddinggemma
+    ollama pull gemma4:31b-cloud
+    ollama pull gemma4:cloud
+
+Copy `.env.example` to `.env`, replace both demo tokens with different random
+values of at least 32 characters, then start the complete stack:
+
+    docker compose up --build
+
+Compose waits for PostgreSQL, applies every migration once, ingests the
+fictional Markdown corpus once and starts the API. The containers reach the
+host Ollama process through the configurable `OLLAMA_BASE_URL`, which defaults
+to `http://host.docker.internal:11434`.
+
+Without Compose, apply migrations and import the corpus with:
+
+    python -m worker.jobs.migrate
 
     python -m worker.jobs.ingest_local_knowledge
 
-The command is idempotent, versions changed documents and marks missing local
-documents as deleted. It performs keyword retrieval until ADR 0003 selects an
-embedding provider.
+Both commands are idempotent. Ingestion versions changed documents, marks
+missing local documents as deleted and reindexes vectors made by another model
+without changing the document version or citation ID.
+
+## Q&A demo
+
+Check process and dependency health:
+
+    curl http://127.0.0.1:8000/health/live
+    curl http://127.0.0.1:8000/health/ready
+
+Ask an employee-visible question using the token from `.env`:
+
+    curl -X POST http://127.0.0.1:8000/v1/questions \
+      -H "Authorization: Bearer <employee-token>" \
+      -H "Content-Type: application/json" \
+      -d '{"question":"Jak zgłosić urlop?"}'
+
+Repeat with the admin token and a question about the fictional service
+agreement to demonstrate role isolation. Authentication happens before
+retrieval. Citations and stale/conflicting-source warnings are backend-owned.
+
+Stop containers without deleting the persistent database:
+
+    docker compose down
+
+Use `docker compose down --volumes` only when deliberately resetting all local
+demo data.

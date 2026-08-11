@@ -53,7 +53,12 @@ class IngestionService:
                 embeddings = self._embedding_provider.embed([chunk.content for chunk in chunks])
                 if len(embeddings) != len(chunks):
                     raise ValueError("embedding provider returned a mismatched vector count")
-            if self._repository.sync_document(document, chunks, embeddings):
+            embedding_model = (
+                None if self._embedding_provider is None else self._embedding_provider.model_id
+            )
+            if self._repository.sync_document(
+                document, chunks, embeddings, embedding_model=embedding_model
+            ):
                 updated += 1
             scanned += 1
         deleted = self._repository.mark_missing_deleted(tenant_id, self._source.name, seen)

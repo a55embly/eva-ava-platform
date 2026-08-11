@@ -1,9 +1,11 @@
-"""Background worker entry point."""
+"""Background worker entry point for the demo ingestion run."""
+
+from worker.jobs.ingest_local_knowledge import main as ingest_local_knowledge
 
 
 def main() -> None:
-    """Start registered background jobs once implemented."""
-    raise SystemExit("Worker jobs have not been implemented yet.")
+    """Run the idempotent demo knowledge ingestion job once."""
+    ingest_local_knowledge()
 
 
 if __name__ == "__main__":

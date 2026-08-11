@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.rag.chunking import chunk_document
+from app.rag.embedding import EmbeddingProvider
 from app.rag.ingestion import IngestionService
 from app.rag.models import AccessLevel, SourceDocument
 from app.rag.repositories import InMemoryKnowledgeRepository
@@ -17,6 +18,23 @@ class MutableSource:
 
     def list_documents(self, tenant_id: str) -> list[SourceDocument]:
         return self.documents
+
+
+class SemanticEmbeddingProvider(EmbeddingProvider):
+    def __init__(self, model_id: str = "semantic-demo-v1") -> None:
+        self._model_id = model_id
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [
+            [1.0, 0.0]
+            if "spoza biura" in text.lower() or "z domu" in text.lower()
+            else [0.0, 1.0]
+            for text in texts
+        ]
 
 
 def document(
@@ -264,3 +282,42 @@ def test_retrieval_returns_real_stable_citations_and_no_data_state() -> None:
     assert first.citations[0].document_version == 1
     assert not missing.answerable
     assert missing.citations == ()
+
+
+def test_semantic_retrieval_finds_a_paraphrase_without_keyword_overlap() -> None:
+    repository = InMemoryKnowledgeRepository()
+    embeddings = SemanticEmbeddingProvider()
+    source = MutableSource(
+        [document("remote", "Praca spoza biura wymaga zgody przełożonego.")]
+    )
+    IngestionService(repository, source, embeddings).run("demo")
+
+    result = RetrievalService(repository, embeddings).retrieve(
+        "demo", AccessLevel.EMPLOYEE, "Czy mogę wykonywać obowiązki z domu?"
+    )
+
+    assert result.answerable
+    assert result.evidence[0].document_title == "remote"
+
+
+def test_embedding_model_change_reindexes_without_new_document_version() -> None:
+    repository = InMemoryKnowledgeRepository()
+    source = MutableSource(
+        [document("remote", "Praca spoza biura wymaga zgody przełożonego.")]
+    )
+    first_provider = SemanticEmbeddingProvider("semantic-demo-v1")
+    second_provider = SemanticEmbeddingProvider("semantic-demo-v2")
+
+    first_report = IngestionService(repository, source, first_provider).run("demo")
+    before = RetrievalService(repository, first_provider).retrieve(
+        "demo", AccessLevel.EMPLOYEE, "obowiązki z domu"
+    )
+    second_report = IngestionService(repository, source, second_provider).run("demo")
+    after = RetrievalService(repository, second_provider).retrieve(
+        "demo", AccessLevel.EMPLOYEE, "obowiązki z domu"
+    )
+
+    assert first_report.updated == 1
+    assert second_report.updated == 1
+    assert after.evidence[0].document_version == 1
+    assert after.citations[0].citation_id == before.citations[0].citation_id
